@@ -1,0 +1,586 @@
+#!/usr/bin/env perl
+my (%g_flags, @g_args);
+
+# Imports: {{{
+
+use 5.012; # implies "use strict;"
+use warnings;
+use autodie;
+
+use Text::Glob qw( match_glob glob_to_regex );
+use Term::ANSIColor qw(:constants);
+use File::Spec;
+use List::Util;
+use File::Glob ':glob';
+use File::Basename;
+
+# Debug
+use Data::Dumper qw(Dumper);
+
+#}}}
+# Default Data: {{{
+my $CONF_FILE = 'dot.conf';
+
+my @commands = (
+  {-c => "link", -d => "links the directories from dotfiles folder"},
+  # {-c => "unlink", -d => "deletes links in directories"},
+  {-c => "help", -d => "prints this message"}
+);
+
+my $opts = {
+  '-f'  => {'type' => 'flag'  , 'name'  => 'force',
+    'description' => "Forces execution (overwrites existing links, and resyncs folders)"
+  },
+  '-c'  => {'type' => 'param' , 'name'  => 'category',
+    'description' => "Specifies category for dotfiles (defaults to common)"
+  },
+  '-d'  => {'type' => 'flag'  , 'name'  => 'dry_run',
+    'description' => "Dry run current set up"
+  },
+  '-v'  => {'type' => 'flag'  , 'name'  => 'verbose',
+    'description' => "Be more verbose (prints debug stuff)"
+  },
+  '-r'  => {'type' => 'flag'  , 'name'  => 'remove',
+    'description' => "When working with folders overwrite them (prompts user)"
+  },
+  '-b'  => {'type' => 'flag'  , 'name'  => 'backup',
+    'description' => "Backup files and place new ones in place, appends '.backup'"
+  },
+  '--root'  => {'type' => 'param'  , 'name'  => 'root',
+    'description' => "Specifies alternative root location (for testing configuration)"
+  },
+  '-yy' => {'type' => 'flag'  , 'name'  => 'yesyes',
+    'description' => "Answer all prompts with yes"
+  },
+};
+
+my $defaultConf = {
+  'root'                => '~',
+  'default_dir_mode'    => 'id',
+  'default_copy_mode'   => 'symlink_rec',
+  'default_dot_mode'    => 'top_level',
+  'default_symlink_ext' => 'xlink',
+  'default_copy_ext'    => 'xcopy',
+  'dirconf'             => {},
+  'ignore'              => ['.DS_Store', '*.bak'],
+};
+
+# }}}
+# Logging Routines: {{{
+
+sub info{my $str = join "", @_;print GREEN, $str, RESET, "\n";}
+sub error{my $str = join "", @_;print RED, $str, RESET, "\n";}
+sub warning{my $str = join "", @_;print YELLOW, $str, RESET, "\n";}
+sub debug{my $str = join "", @_;print($str, "\n") if (defined $g_flags{'verbose'});}
+
+# }}}
+
+sub main{ #{{{
+  my (@args) = @_;
+  my $command = shift(@args);
+
+  my ($flags, $rest) = ParseFlags(\@args, $opts);
+  
+  %g_flags = %{$flags};
+  @g_args  = @{$rest};
+
+  if ($command eq 'link') {
+    LinkDotfiles(@args);
+  } else {
+    PrintHelp();
+  }
+} #}}}
+
+#######################################################################
+#                          Command Handlers                           #
+#######################################################################
+
+sub PrintHelp{ #{{{
+  print "Help:\n";
+  my %opts = %{$opts};
+  print "# Commands:\n";
+  foreach my $line (@commands){
+    print "  $line->{-c} -- $line->{-d}\n"
+  }
+  print "# Options\n";
+  my @keys = sort (keys %opts);
+  foreach my $key (@keys){
+    
+    print ">  ". $key ."\t-- ". $opts{$key}->{'description'} ."\n";
+  }
+
+} #}}}
+sub LinkDotfiles{ my (@args) = @_; #{{{
+  my $dir = './dotfiles';
+  my $category = 'common';
+
+  if ($g_flags{'category'}) {
+    $category = $g_flags{'category'};
+  }
+
+
+  ProcessCategory(_joinPath($dir, $category));
+} #}}}
+sub ParseFlags{ my ($args, $opts) = @_; #{{{
+  my @args = @{$args};
+  my %opts = %{$opts};
+  my (%flags, @rest);
+
+  while (scalar @args) {
+    my $arg = shift @args;
+    if (defined $opts{$arg}) {
+      my %inf = %{$opts{$arg}};
+      if ($inf{'type'} eq 'flag') {
+        $flags{$inf{'name'}} = 1;
+      } elsif ($inf{'type'} eq 'param') {
+        $flags{$inf{'name'}} = shift @args;
+      }
+    } else {
+      push @rest, $arg;
+    }
+  }
+  
+  return (\%flags, \@rest);
+} #}}}
+
+#######################################################################
+#                               Engine                                #
+#######################################################################
+
+sub ProcessCategory{ my ($categoryPath) = @_; #{{{
+  my @topLevel       = _listDir($categoryPath);
+  my %config         = _evalConf(_joinPath($categoryPath, $CONF_FILE));
+  my %dirConfLibrary = %{$config{'dirconf'}};
+  my %defaultDirConf = (
+    'root'        => $config{'root'},
+    'dot_mode'    => $config{'default_dot_mode'},
+    'copy_mode'   => $config{'default_copy_mode'},
+    'dir_mode'    => $config{'default_dir_mode'},
+    'symlink_ext' => $config{'default_symlink_ext'},
+    'copy_ext'    => $config{'default_copy_ext'},
+    'ignore'      => $config{'ignore'}
+  );
+
+  # Getting rid of all of the top level files
+  # and the folders disables in config
+  @topLevel = grep { 
+    my $fileKey = substr $_, 0, -1;
+    (-d _joinPath($categoryPath, $fileKey)) &&
+    !(grep /^$fileKey$/ , @{$config{'disabled'}})
+  } @topLevel;
+
+
+  for my $file (@topLevel) {
+    my $fileKey = substr $file, 0, -1;
+    my %dirConf;
+
+    if (defined $dirConfLibrary{$fileKey}) {
+      %dirConf = %{$dirConfLibrary{$fileKey}};
+    } 
+
+    %dirConf = (%defaultDirConf, %dirConf);
+
+    ProcessFolder(_joinPath($categoryPath, $file), $file, \%dirConf);
+  }
+} #}}}
+sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
+  debug " ";
+  my %options  = %{$options};
+  my $root     = $options{'root'};
+  my $dirMode  = $options{'dir_mode'};
+  my $dotMode  = $options{'dot_mode'};
+  my $copyMode = $options{'copy_mode'};
+  my @ignore   = @{$options{'ignore'}};
+  my $lext     = $options{'symlink_ext'};
+  my $cext     = $options{'copy_ext'};
+  my ($dest, $source);
+
+  if ($g_flags{'root'}) {
+    $root = $g_flags{'root'};
+  }
+
+  if ($dirMode eq 'id') {
+    $source = _absPath($folderPath);
+    if ($dotMode eq 'no_dot') {
+      $dest   = $name;
+    } else {
+      $dest   = '.' . $name;
+    }
+    $dest = _joinPath($root, $dest);
+
+    DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
+
+  } elsif ($options{'dir_mode'} eq 'root') {
+    foreach my $file (_listDir($folderPath)) {
+      $source = _absPath(_joinPath($folderPath, $file));
+      if ($dotMode eq 'no_dot') {
+        $dest   = $file;
+      } else {
+        $dest   = '.' . $file;
+      }
+      $dest = _joinPath($root, $dest);
+      
+      DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
+    }
+  }
+} #}}}
+sub DispatchItem{ my ($copyMode, $source, $dest, $ignore, $lext, $cext) = @_; #{{{
+  if($copyMode eq 'copy') {
+    if (-d $source) {
+      $source = $source . '/';
+    }
+    _copyPath($source, $dest);
+  } elsif($copyMode eq 'symlink') {
+    _linkPath($source, $dest);
+  } elsif($copyMode eq 'symlink_rec') {
+    debug "Recursively Linking Location [$source]";
+    _linkPathRec($source, $dest, $ignore, $lext, $cext);
+  }
+} #}}}
+
+#######################################################################
+#                              Utilities                              #
+#######################################################################
+
+sub _uniq { #{{{
+    my %seen;
+    grep !$seen{$_}++, @_;
+} #}}}
+sub _listDir{ my ($dir) = @_; #{{{
+  my @files;
+
+  opendir(DIR, $dir);
+  while (my $file = readdir(DIR)) {
+      $file = $file . "/" if (-d _joinPath($dir, $file));
+      push(@files, "$file") unless ($file eq '../' || $file eq './');
+  }
+  closedir(DIR);
+
+  return @files;
+} #}}}
+sub _listDirRec{ my ($dir, $sub) = @_; #{{{
+  my (@files, @filesRaw, $path);
+
+  $sub = '' if (!defined $sub);
+  $path = _joinPath($dir, $sub);
+
+  if (-f $path) {
+    push @files, $sub
+  } elsif (-d $path) {
+    @filesRaw = _listDir($path);
+
+    foreach my $file (@filesRaw) {
+      my $newSub = _joinPath($sub, $file);
+      my @new_files = _listDirRec($dir, $newSub);
+      if (scalar @new_files == 0) {
+        push @files, $newSub . '/';
+      } else {
+        push @files, @new_files;
+      }
+    }
+  }
+
+  return @files;
+} #}}}
+sub _joinPath{ my ($prefix, $head) = @_; #{{{
+  return File::Spec->join($prefix, $head);
+} #}}}
+sub _absPath{ my ($path) = @_; #{{{
+  $path =~ s/^~/${ENV{'HOME'}}\//g;
+  return File::Spec->rel2abs($path);
+} #}}}
+sub _evalConf{ my ($path) = @_; #{{{
+  my $configFile;
+
+  open CONFIG, $path or die "OOPS";
+  $configFile = join "", <CONFIG>;
+  close CONFIG;
+
+  undef $Dot::Conf::config if (defined $Dot::Conf::config);
+  eval $configFile;
+  die "Error parsing config [$path]" if (!defined $Dot::Conf::config);
+
+  my $configRef = $Dot::Conf::config;
+  my %finalHash = (%{$defaultConf}, %{$configRef});
+
+  return %finalHash;
+} #}}}
+sub _globFilterExclude{ my ($globs, $arr) = @_; #{{{
+  my @globs = @{$globs};
+  my @arr   = @{$arr};
+
+  return grep { my $el = $_;
+    my $good = 1;
+    foreach my $gl (@globs) {
+      $good = _extGlobMatch($gl, $el) ? 0 : 1;
+      last if $good == 0;
+    }
+    $good
+  } @arr;
+} #}}}
+sub _extGlobMatch{ my ($glob, $el) = @_; #{{{
+  my $rStar  = '[^/]';
+  my $rDStar = '.*';
+  my $regex  = '';
+
+  if ($glob =~ /\*/) {
+    for (my $i = 0; $i < length $glob; ) {
+      my $char = substr($glob, $i, 1);
+      my $charn = substr($glob, $i+1, 1);
+
+      if ($char eq '*' && $charn eq '*' ) {
+        $regex = $regex . $rDStar;
+        $i+=2;
+      } elsif ($char eq '*' ) {
+        $regex = $regex . $rStar;
+        $i++;
+      } elsif ($char eq '.') {
+        $regex = $regex . '\.';
+        $i++;
+      } else {
+        $regex = $regex . $char;
+        $i++;
+      }
+    }
+  } else {
+    $regex = $glob;
+    $regex =~ s/\./\./g;
+    $regex = '^.*' . $regex;
+  }
+
+  $regex = $regex . '$';
+  
+  return $el =~ /$regex/;
+} #}}}
+sub _prefixFilterExclude{ my ($prefix, $arr) = @_; #{{{
+  my @arr = @{$arr};
+  return grep { index($_, $prefix) != 0 } @arr;
+} #}}}
+sub _prefixFilterContains{ my ($prefix, $arr) = @_; #{{{
+  my @arr = @{$arr};
+  return grep { index($_, $prefix) == 0 } @arr;
+} #}}}
+sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
+  if (-d $src) {
+    my @files = _listDirRec($src);
+
+    if (defined $copy_ext) {
+      my @copy_files;
+
+      @files = _uniq map { my $file = $_;
+        $file =~ s/(?<=\.$copy_ext)\/.*/\//g; $file
+      } @files;
+    
+
+      @copy_files = grep {
+        $_ =~ /\.$copy_ext/
+      } @files;
+
+      @files = grep {
+        !($_ =~ /\.$copy_ext/)
+      } @files;
+
+      foreach my $file (@copy_files) {
+        my $rel = substr $file, 1;
+        my $reld = $rel;
+        $reld =~ s/\.$copy_ext\/.*/\//g;
+        my $source = _joinPath($src, $rel);
+        if (-d $source) {
+          $source = $source . '/';
+        }
+        _copyPath($source , _joinPath($dest, $reld));
+      }
+    }
+
+    if (defined $symlink_ext) {
+      my @symlink_files;
+
+      @files = _uniq map { my $file = $_;
+        $file =~ s/(?<=\.$symlink_ext)\/.*/\//g; $file
+      } @files;
+
+      @symlink_files = grep {
+        $_ =~ /\.$symlink_ext/
+      } @files;
+
+      @files = grep {
+        !($_ =~ /\.$symlink_ext/)
+      } @files;
+
+      foreach my $file (@symlink_files) {
+        my $rel = substr $file, 1;
+        my $reld = $rel;
+        $reld =~ s/\.$symlink_ext\/.*/\//g;
+        _linkPath(_joinPath($src, $rel), _joinPath($dest, $reld));
+      }
+    }
+
+    @files = _globFilterExclude($ignore, \@files);
+
+    # Getting rid of directories
+    @files = grep {
+      !($_ =~ /\/$/)
+    } @files;
+
+    foreach my $file (@files) {
+      my $rel = substr $file, 1;
+      my $reld = $rel;
+      _linkPath(_joinPath($src, $rel), _joinPath($dest, $reld));
+    }
+
+  } else {
+    _linkPath($src, $dest);
+  }
+} #}}}
+
+#######################################################################
+#                            IO FUNCTIONS                             #
+#######################################################################
+
+sub _ensureParentFolderExists{ my ($path) = @_; #{{{
+  my $dir = dirname($path);
+  unless (-e $dir) {
+    unless ($dir eq '' || $dir eq '/' || $dir eq '.' || $dir eq '..') {
+      _ensureParentFolderExists($dir);
+      debug ".. Creating [$dir]";
+      mkdir $dir or die "Can not create directory";
+    }
+  }
+} #}}}
+sub _copyPath{ my ($src, $dest) = @_; #{{{
+  if (-e _absPath($dest)) {
+    if ($g_flags{'force'}) {
+      
+      # When copying we can either remove the item and replace
+      # Or we can merge newer version
+      # By default I am merging to avoid accidents
+      if ($g_flags{'remove'}) {
+        error "REPLACING>[C]:  [$src] -> [$dest]";
+        $dest = _absPath($dest);
+
+        ## IO Operation is Shielded by Dry Run
+        unless ($g_flags{'dry_run'}) {
+          _ensureParentFolderExists($dest);
+          if (-d $dest && !(-l $dest)) {
+            if ($g_flags{'yesyes'}) {
+              system("rm -rf \"$dest\"");
+            } else {
+              print "About to delete directory [$dest]. Are you sure? (yes/no):";
+              my $answer =  <STDIN>;
+              chomp $answer;
+              if ($answer eq 'yes') {
+                system("rm -rf \"$dest\"");
+              } else {
+                print "Skipping [$dest]\n";
+              }
+            }
+          } else {
+            unlink $dest;
+          }
+          eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
+        } 
+      } else {
+        if (-d $src) {
+          $src = $src . "/";
+        }
+        error "RESYNCYNG[C]:>>>[$src] -> [$dest]";
+        $dest = _absPath($dest);
+
+
+        ## IO Operation is Shielded by Dry Run
+        unless ($g_flags{'dry_run'}) {
+          _ensureParentFolderExists($dest);
+          if ($g_flags{'backup'}) {
+            system "rm -rf \"$dest".'.backup'."\"";
+            eval { system "mv  \"$dest\" \"$dest".'.backup'."\""; 1}
+          }
+          eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
+        }
+      }
+
+    } else {
+      warning "EXISTS:     [$src] -> [$dest]";
+      $dest = _absPath($dest);
+    }
+  } else {
+    info "COPYING:    [$src] -> [$dest]";
+    $dest = _absPath($dest);
+
+    ## IO Operation is Shielded by Dry Run
+    unless ($g_flags{'dry_run'}) {
+      _ensureParentFolderExists($dest);
+      eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
+    }
+  }
+
+  unless ($g_flags{'dry_run'}) {
+    _ensureParentFolderExists($dest);
+  }
+} #}}}
+sub _linkPath{ my ($src, $dest) = @_; #{{{
+  if (-e _absPath($dest)) {
+    if ($g_flags{'force'}) {
+      if ($g_flags{'remove'}) {
+        error "REPLACING>[L]:  [$dest] -> [$src]";
+        $dest = _absPath($dest);
+
+        ## IO Operation is Shielded by Dry Run
+        unless ($g_flags{'dry_run'}) {
+          if (-d $dest && !(-l $dest)) {
+            if ($g_flags{'yesyes'}) {
+              system("rm -rf \"$dest\"");
+            } else {
+              print "About to delete directory [$dest]. Are you sure? (yes/no):";
+              my $answer =  <STDIN>;
+              chomp $answer;
+              if ($answer eq 'yes') {
+                system("rm -rf \"$dest\"");
+              } else {
+                print "Skipping [$dest]\n";
+              }
+            }
+          } else {
+            unlink $dest;
+          }
+
+          _ensureParentFolderExists($dest);
+          eval { symlink($src, $dest); 1}
+        }
+      } else {
+        error "RESYNCING[L]:>>>[$dest] -> [$src]";
+        $dest = _absPath($dest);
+
+        ## IO Operation is Shielded by Dry Run
+        unless ($g_flags{'dry_run'}) {
+          _ensureParentFolderExists($dest);
+          if ($g_flags{'backup'}) {
+            system "rm -rf \"$dest".'.backup'."\"";
+            eval { system "mv \"$dest\" \"$dest".'.backuplink'."\""; 1}
+          } else {
+            unlink $dest;
+          }
+          eval { symlink($src, $dest); 1}
+        }
+      }  
+    } else {
+      warning "EXISTS:     [$dest] -> [$src]";
+      $dest = _absPath($dest);
+
+      debug "\\---------->", readlink $dest;
+    }
+  } else {
+    info "SYMLINKING: [$dest] -> [$src]";
+    $dest = _absPath($dest);
+
+    ## IO Operation is Shielded by Dry Run
+    unless ($g_flags{'dry_run'}) {
+      _ensureParentFolderExists($dest);
+      eval { symlink($src, $dest); 1}
+    }
+  }
+
+} #}}}
+
+# Entry Point:
+main(@ARGV);
+# vim: foldmethod=marker
