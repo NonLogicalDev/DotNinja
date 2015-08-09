@@ -1,0 +1,3 @@
+* DotNinja
+  Someday the ultimate dotfile manager, but for now just a tool that
+  scratches my itch.
