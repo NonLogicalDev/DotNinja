@@ -118,7 +118,6 @@ sub LinkDotfiles{ my (@args) = @_; #{{{
     $category = $g_flags{'category'};
   }
 
-
   ProcessCategory(_joinPath($dir, $category));
 } #}}}
 sub ParseFlags{ my ($args, $opts) = @_; #{{{
@@ -169,7 +168,6 @@ sub ProcessCategory{ my ($categoryPath) = @_; #{{{
     !(grep /^$fileKey$/ , @{$config{'disabled'}})
   } @topLevel;
 
-
   for my $file (@topLevel) {
     my $fileKey = substr $file, 0, -1;
     my %dirConf;
@@ -207,9 +205,7 @@ sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
       $dest   = '.' . $name;
     }
     $dest = _joinPath($root, $dest);
-
     DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
-
   } elsif ($options{'dir_mode'} eq 'root') {
     foreach my $file (_listDir($folderPath)) {
       $source = _absPath(_joinPath($folderPath, $file));
@@ -219,16 +215,13 @@ sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
         $dest   = '.' . $file;
       }
       $dest = _joinPath($root, $dest);
-      
       DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
     }
   }
 } #}}}
 sub DispatchItem{ my ($copyMode, $source, $dest, $ignore, $lext, $cext) = @_; #{{{
   if($copyMode eq 'copy') {
-    if (-d $source) {
-      $source = $source . '/';
-    }
+    if (-d $source) { $source = $source . '/'; }
     _copyPath($source, $dest);
   } elsif($copyMode eq 'symlink') {
     _linkPath($source, $dest);
@@ -242,9 +235,14 @@ sub DispatchItem{ my ($copyMode, $source, $dest, $ignore, $lext, $cext) = @_; #{
 #                              Utilities                              #
 #######################################################################
 
+sub _promptUser { my ($prompt) = @_; #{{{
+  print $prompt;
+  my $answer =  <STDIN>;
+  chomp $answer;
+  return $answer;
+} #}}}
 sub _uniq { #{{{
-    my %seen;
-    grep !$seen{$_}++, @_;
+    my %seen; grep !$seen{$_}++, @_;
 } #}}}
 sub _listDir{ my ($dir) = @_; #{{{
   my @files;
@@ -364,13 +362,14 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
   if (-d $src) {
     my @files = _listDirRec($src);
 
+    # Separately copying the files or folders with the copy extension
+    # And excluding them from the files that need linking
     if (defined $copy_ext) {
       my @copy_files;
 
       @files = _uniq map { my $file = $_;
         $file =~ s/(?<=\.$copy_ext)\/.*/\//g; $file
       } @files;
-    
 
       @copy_files = grep {
         $_ =~ /\.$copy_ext/
@@ -392,6 +391,8 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
       }
     }
 
+    # Separately simlikin the files or folders with the symlink extension
+    # And excluding them from the files that need linking
     if (defined $symlink_ext) {
       my @symlink_files;
 
@@ -434,70 +435,24 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
 } #}}}
 
 #######################################################################
-#                            IO FUNCTIONS                             #
+#                           Low Level Pipes                           #
 #######################################################################
 
-sub _ensureParentFolderExists{ my ($path) = @_; #{{{
-  my $dir = dirname($path);
-  unless (-e $dir) {
-    unless ($dir eq '' || $dir eq '/' || $dir eq '.' || $dir eq '..') {
-      _ensureParentFolderExists($dir);
-      debug ".. Creating [$dir]";
-      mkdir $dir or die "Can not create directory";
-    }
-  }
-} #}}}
 sub _copyPath{ my ($src, $dest) = @_; #{{{
   if (-e _absPath($dest)) {
     if ($g_flags{'force'}) {
-      
       # When copying we can either remove the item and replace
       # Or we can merge newer version
       # By default I am merging to avoid accidents
       if ($g_flags{'remove'}) {
         error "REPLACING>[C]:  [$src] -> [$dest]";
         $dest = _absPath($dest);
-
-        ## IO Operation is Shielded by Dry Run
-        unless ($g_flags{'dry_run'}) {
-          _ensureParentFolderExists($dest);
-          if (-d $dest && !(-l $dest)) {
-            if ($g_flags{'yesyes'}) {
-              system("rm -rf \"$dest\"");
-            } else {
-              print "About to delete directory [$dest]. Are you sure? (yes/no):";
-              my $answer =  <STDIN>;
-              chomp $answer;
-              if ($answer eq 'yes') {
-                system("rm -rf \"$dest\"");
-              } else {
-                print "Skipping [$dest]\n";
-              }
-            }
-          } else {
-            unlink $dest;
-          }
-          eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
-        } 
+        _hardReCopy($src, $dest);
       } else {
-        if (-d $src) {
-          $src = $src . "/";
-        }
         error "RESYNCYNG[C]:>>>[$src] -> [$dest]";
         $dest = _absPath($dest);
-
-
-        ## IO Operation is Shielded by Dry Run
-        unless ($g_flags{'dry_run'}) {
-          _ensureParentFolderExists($dest);
-          if ($g_flags{'backup'}) {
-            system "rm -rf \"$dest".'.backup'."\"";
-            eval { system "mv  \"$dest\" \"$dest".'.backup'."\""; 1}
-          }
-          eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
-        }
+        _softReCopy($src, $dest);
       }
-
     } else {
       warning "EXISTS:     [$src] -> [$dest]";
       $dest = _absPath($dest);
@@ -505,16 +460,7 @@ sub _copyPath{ my ($src, $dest) = @_; #{{{
   } else {
     info "COPYING:    [$src] -> [$dest]";
     $dest = _absPath($dest);
-
-    ## IO Operation is Shielded by Dry Run
-    unless ($g_flags{'dry_run'}) {
-      _ensureParentFolderExists($dest);
-      eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
-    }
-  }
-
-  unless ($g_flags{'dry_run'}) {
-    _ensureParentFolderExists($dest);
+    _syncIO($src, $dest);
   }
 } #}}}
 sub _linkPath{ my ($src, $dest) = @_; #{{{
@@ -523,62 +469,130 @@ sub _linkPath{ my ($src, $dest) = @_; #{{{
       if ($g_flags{'remove'}) {
         error "REPLACING>[L]:  [$dest] -> [$src]";
         $dest = _absPath($dest);
-
-        ## IO Operation is Shielded by Dry Run
-        unless ($g_flags{'dry_run'}) {
-          if (-d $dest && !(-l $dest)) {
-            if ($g_flags{'yesyes'}) {
-              system("rm -rf \"$dest\"");
-            } else {
-              print "About to delete directory [$dest]. Are you sure? (yes/no):";
-              my $answer =  <STDIN>;
-              chomp $answer;
-              if ($answer eq 'yes') {
-                system("rm -rf \"$dest\"");
-              } else {
-                print "Skipping [$dest]\n";
-              }
-            }
-          } else {
-            unlink $dest;
-          }
-
-          _ensureParentFolderExists($dest);
-          eval { symlink($src, $dest); 1}
-        }
+        _hardRelink($src, $dest);
       } else {
         error "RESYNCING[L]:>>>[$dest] -> [$src]";
         $dest = _absPath($dest);
-
-        ## IO Operation is Shielded by Dry Run
-        unless ($g_flags{'dry_run'}) {
-          _ensureParentFolderExists($dest);
-          if ($g_flags{'backup'}) {
-            system "rm -rf \"$dest".'.backup'."\"";
-            eval { system "mv \"$dest\" \"$dest".'.backuplink'."\""; 1}
-          } else {
-            unlink $dest;
-          }
-          eval { symlink($src, $dest); 1}
-        }
+        _softRelink($src, $dest);
       }  
     } else {
       warning "EXISTS:     [$dest] -> [$src]";
       $dest = _absPath($dest);
-
       debug "\\---------->", readlink $dest;
     }
   } else {
     info "SYMLINKING: [$dest] -> [$src]";
     $dest = _absPath($dest);
-
-    ## IO Operation is Shielded by Dry Run
-    unless ($g_flags{'dry_run'}) {
-      _ensureParentFolderExists($dest);
-      eval { symlink($src, $dest); 1}
-    }
+    _linkIO($src, $dest);
   }
+} #}}}
+sub _hardReCopy { my ($src, $dest) = @_; #{{{
+  ## IO Operation is Shielded by Dry Run
+  unless ($g_flags{'dry_run'}) {
+    if (-d $dest && !(-l $dest)) {
+      my $prompt = "About to delete directory [$dest]. Are you sure? (yes/no):";
+      if ($g_flags{'yesyes'} or (_promptUser($prompt) eq 'yes')) {
+        _removeIO($dest);
+      } else {
+        print "Skipping [$dest]\n";
+      }
+    } else {
+      _removeIO($dest);
+    }
+    _syncIO($src, $dest);
+  } 
+} #}}}
+sub _softReCopy { my ($src, $dest) = @_;#{{{
+  _backup($dest);
+  _syncIO($src, $dest);
+}#}}}
+sub _hardRelink { my ($src, $dest) = @_; #{{{
+  if (-d $dest && !(-l $dest)) {
+    my $prompt = "About to delete directory [$dest]. Are you sure? (yes/no):";
+    if ($g_flags{'yesyes'} or (_promptUser($prompt) eq 'yes')) {
+      _removeIO($dest);
+    } else {
+      print "Skipping [$dest]\n";
+    }
+  } else {
+    _removeIO($dest);
+  }
+  _linkIO($src, $dest);
+} #}}}
+sub _softRelink { my ($src, $dest) = @_; #{{{
+  _backup($dest);
+  _removeIO($dest);
+  _linkIO($src, $dest);
+} #}}}
+sub _backup { my ($dest) = @_; #{{{
+  if ($g_flags{'backup'}) {
+  _removeIO("$dest".'.backup');
+  _moveIO($dest, "$dest".'.backup');
+  } 
+} #}}}
 
+#######################################################################
+#                            IO FUNCTIONS                             #
+#######################################################################
+
+sub _ensureParentFolderExists{ my ($path) = @_; #{{{
+  my $dir = dirname($path);
+  _systemMakeDir($dir);
+} #}}}
+sub _linkIO { my ($src, $dest) = @_; #{{{
+  ## IO Operation is Shielded by Dry Run
+  unless ($g_flags{'dry_run'}) {
+    _ensureParentFolderExists($dest);
+    _systemLink($src, $dest);
+  }
+} #}}}
+sub _syncIO { my ($src, $dest) = @_;#{{{
+  ## IO Operation is Shielded by Dry Run
+  unless ($g_flags{'dry_run'}) {
+    if (-d $src) { $src = $src . "/"; }
+    _ensureParentFolderExists($dest);
+    _systemSync($src, $dest);
+  }
+} #}}}
+sub _moveIO { my ($src, $dest) = @_;#{{{
+  ## IO Operation is Shielded by Dry Run
+  unless ($g_flags{'dry_run'}) {
+    if (-d $src) { $src = $src . "/"; }
+    _systemMove($src, $dest);
+  } 
+} #}}}
+sub _removeIO { my ($dest) = @_; #{{{
+  ## IO Operation is Shielded by Dry Run
+  unless ($g_flags{'dry_run'}) {
+    _systemRemove($dest);
+  }
+} #}}}
+
+#######################################################################
+#                       System Command Wrappers                       #
+#######################################################################
+
+sub _systemRemove { my ($dest) = @_; #{{{
+  eval { system "rm -rf \"$dest\""; 1}
+} #}}}
+sub _systemMove { my ($src, $dest) = @_; #{{{
+  eval { system "mv \"$src\" \"$dest\""; 1}
+} #}}}
+sub _systemCopy { my ($src, $dest) = @_; #{{{
+  if (-d $src) {
+    eval { system "cp -r \"$src\" \"$dest\""; 1}
+  } else {
+    eval { system "cp \"$src\" \"$dest\""; 1}
+  }
+} #}}}
+sub _systemLink { my ($src, $dest) = @_; #{{{
+  eval { symlink($src, $dest); 1}
+} #}}}
+sub _systemSync { my ($src, $dest) = @_; #{{{
+  eval { system "rsync -va -K \"$src\" \"$dest\""; 1}
+} #}}}
+sub _systemMakeDir { my ($dest) = @_; #{{{
+  eval { system "mkdir -p \"$dest\""; 1}
 } #}}}
 
 # Entry Point:
