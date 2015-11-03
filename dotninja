@@ -445,20 +445,23 @@ sub _copyPath{ my ($src, $dest) = @_; #{{{
       # Or we can merge newer version
       # By default I am merging to avoid accidents
       if ($g_flags{'remove'}) {
-        error "REPLACING>[C]:  [$src] -> [$dest]";
+        error "REPLACING>[C]:  [$dest] <= [$src]";
         $dest = _absPath($dest);
         _hardReCopy($src, $dest);
       } else {
-        error "RESYNCYNG[C]:>>>[$src] -> [$dest]";
+        error "RESYNCYNG[C]:>>>[$dest] <= [$src]";
         $dest = _absPath($dest);
         _softReCopy($src, $dest);
       }
     } else {
-      warning "EXISTS:     [$src] -> [$dest]";
-      $dest = _absPath($dest);
+      if (`/usr/bin/diff -rq $dest $src` eq "") {
+        warning "EXISTS:     [$dest] <= [$src]";
+      } else {
+        error "CHANGED:    [$dest] <= [$src]";
+      }
     }
   } else {
-    info "COPYING:    [$src] -> [$dest]";
+    info "COPYING:    [$dest] <= [$src]";
     $dest = _absPath($dest);
     _syncIO($src, $dest);
   }
