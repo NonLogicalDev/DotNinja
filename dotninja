@@ -316,6 +316,15 @@ sub _globFilterExclude{ my ($globs, $arr) = @_; #{{{
     $good
   } @arr;
 } #}}}
+sub _globFilterMatch{ my ($globs, $el) = @_; #{{{
+  my @globs = @{$globs};
+  my $good = 0;
+  foreach my $gl (@globs) {
+    $good = _extGlobMatch($gl, $el) ? 1 : 0;
+    last if $good == 1;
+  }
+  return $good;
+} #}}}
 sub _extGlobMatch{ my ($glob, $el) = @_; #{{{
   my $rStar  = '[^/]';
   my $rDStar = '.*';
@@ -361,6 +370,7 @@ sub _prefixFilterContains{ my ($prefix, $arr) = @_; #{{{
 sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
   if (-d $src) {
     my @files = _listDirRec($src);
+    @files = _globFilterExclude($ignore, \@files);
 
     # Separately copying the files or folders with the copy extension
     # And excluding them from the files that need linking
@@ -416,8 +426,6 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
       }
     }
 
-    @files = _globFilterExclude($ignore, \@files);
-
     # Getting rid of directories
     @files = grep {
       !($_ =~ /\/$/)
@@ -430,7 +438,10 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
     }
 
   } else {
-    _linkPath($src, $dest);
+    my $match = _globFilterMatch($ignore, $src);
+    if ($match == 0)  {
+      _linkPath($src, $dest);
+    }
   }
 } #}}}
 
