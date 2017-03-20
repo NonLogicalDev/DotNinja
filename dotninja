@@ -52,6 +52,12 @@ my $opts = {
   '-yy' => {'type' => 'flag'  , 'name'  => 'yesyes',
     'description' => "Answer all prompts with yes"
   },
+  '-t'  => {'type' => 'param'  , 'name'  => 'topic',
+    'description' => "Specifies a specific topic to sync"
+  },
+  '-tl'  => {'type' => 'flag'  , 'name'  => 'topiclist',
+    'description' => "Lists the available topics"
+  },
 };
 
 my $defaultConf = {
@@ -61,6 +67,7 @@ my $defaultConf = {
   'default_dot_mode'    => 'top_level',
   'default_symlink_ext' => 'xlink',
   'default_copy_ext'    => 'xcopy',
+  'default_touch_ext'   => 'xtouch',
   'dirconf'             => {},
   'ignore'              => ['.DS_Store', '*.bak'],
 };
@@ -161,13 +168,17 @@ sub ProcessCategory{ my ($categoryPath) = @_; #{{{
   );
 
   # Getting rid of all of the top level files
-  # and the folders disables in config
+  # and the folders disabled in config
   @topLevel = grep { 
     my $fileKey = substr $_, 0, -1;
     (-d _joinPath($categoryPath, $fileKey)) &&
     !(grep /^$fileKey$/ , @{$config{'disabled'}})
   } @topLevel;
 
+  if ($g_flags{'topiclist'}) {
+    info "Avalable Topics:";
+  }
+  
   for my $file (@topLevel) {
     my $fileKey = substr $file, 0, -1;
     my %dirConf;
@@ -177,8 +188,11 @@ sub ProcessCategory{ my ($categoryPath) = @_; #{{{
     } 
 
     %dirConf = (%defaultDirConf, %dirConf);
-
-    ProcessFolder(_joinPath($categoryPath, $file), $file, \%dirConf);
+    if ($g_flags{'topiclist'}) { 
+      info ">> $file";
+    } elsif (!$g_flags{'topic'} || $g_flags{'topic'} && $file eq "$g_flags{'topic'}/") {
+      ProcessFolder(_joinPath($categoryPath, $file), $file, \%dirConf);
+    }
   }
 } #}}}
 sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
