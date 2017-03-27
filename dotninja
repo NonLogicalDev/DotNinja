@@ -7,11 +7,10 @@ use 5.012; # implies "use strict;"
 use warnings;
 use autodie;
 
-use Text::Glob qw( match_glob glob_to_regex );
 use Term::ANSIColor qw(:constants);
+# use List::Util;
+# use File::Glob ':glob';
 use File::Spec;
-use List::Util;
-use File::Glob ':glob';
 use File::Basename;
 
 # Debug
@@ -258,6 +257,22 @@ sub _promptUser { my ($prompt) = @_; #{{{
 sub _uniq { #{{{
     my %seen; grep !$seen{$_}++, @_;
 } #}}}
+sub _evalConf{ my ($path) = @_; #{{{
+  my $configFile;
+
+  open CONFIG, $path or die "OOPS";
+  $configFile = join "", <CONFIG>;
+  close CONFIG;
+
+  undef $Dot::Conf::config if (defined $Dot::Conf::config);
+  eval $configFile;
+  die "Error parsing config [$path]" if (!defined $Dot::Conf::config);
+
+  my $configRef = $Dot::Conf::config;
+  my %finalHash = (%{$defaultConf}, %{$configRef});
+
+  return %finalHash;
+} #}}}
 sub _listDir{ my ($dir) = @_; #{{{
   my @files;
 
@@ -277,10 +292,11 @@ sub _listDirRec{ my ($dir, $sub) = @_; #{{{
   $path = _joinPath($dir, $sub);
 
   if (-f $path) {
-    push @files, $sub
+    push @files, $sub;
   } elsif (-d $path) {
     @filesRaw = _listDir($path);
 
+    push @files, $sub . '/';
     foreach my $file (@filesRaw) {
       my $newSub = _joinPath($sub, $file);
       my @new_files = _listDirRec($dir, $newSub);
@@ -300,22 +316,6 @@ sub _joinPath{ my ($prefix, $head) = @_; #{{{
 sub _absPath{ my ($path) = @_; #{{{
   $path =~ s/^~/${ENV{'HOME'}}\//g;
   return File::Spec->rel2abs($path);
-} #}}}
-sub _evalConf{ my ($path) = @_; #{{{
-  my $configFile;
-
-  open CONFIG, $path or die "OOPS";
-  $configFile = join "", <CONFIG>;
-  close CONFIG;
-
-  undef $Dot::Conf::config if (defined $Dot::Conf::config);
-  eval $configFile;
-  die "Error parsing config [$path]" if (!defined $Dot::Conf::config);
-
-  my $configRef = $Dot::Conf::config;
-  my %finalHash = (%{$defaultConf}, %{$configRef});
-
-  return %finalHash;
 } #}}}
 sub _globFilterExclude{ my ($globs, $arr) = @_; #{{{
   my @globs = @{$globs};
@@ -385,62 +385,80 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
   if (-d $src) {
     my @files = _listDirRec($src);
     @files = _globFilterExclude($ignore, \@files);
+ 
+    # Some files/folders might be overriden we shall collect them here
+    my @copy_files;
+    my @symlink_files;
 
-    # Separately copying the files or folders with the copy extension
-    # And excluding them from the files that need linking
-    if (defined $copy_ext) {
-      my @copy_files;
-
-      @files = _uniq map { my $file = $_;
-        $file =~ s/(?<=\.$copy_ext)\/.*/\//g; $file
-      } @files;
-
-      @copy_files = grep {
-        $_ =~ /\.$copy_ext/
-      } @files;
-
-      @files = grep {
-        !($_ =~ /\.$copy_ext/)
-      } @files;
-
-      foreach my $file (@copy_files) {
-        my $rel = substr $file, 1;
-        my $reld = $rel;
-        $reld =~ s/\.$copy_ext\/.*/\//g;
-        my $source = _joinPath($src, $rel);
-        if (-d $source) {
-          $source = $source . '/';
-        }
-        _copyPath($source , _joinPath($dest, $reld));
-      }
-    }
-
-    # Separately simlikin the files or folders with the symlink extension
-    # And excluding them from the files that need linking
     if (defined $symlink_ext) {
-      my @symlink_files;
-
+      # Find all paths with folders that end in link extension and strip out
+      # all of the path levels after the link extension:
+      #   /blah/blah.xlink/blah -> /blah/blah.xlink/
       @files = _uniq map { my $file = $_;
         $file =~ s/(?<=\.$symlink_ext)\/.*/\//g; $file
       } @files;
 
+      # Collect all the folders that need linking
       @symlink_files = grep {
         $_ =~ /\.$symlink_ext/
       } @files;
 
+      # And delete them from the all of the overall file list
       @files = grep {
         !($_ =~ /\.$symlink_ext/)
       } @files;
-
-      foreach my $file (@symlink_files) {
-        my $rel = substr $file, 1;
-        my $reld = $rel;
-        $reld =~ s/\.$symlink_ext\/.*/\//g;
-        _linkPath(_joinPath($src, $rel), _joinPath($dest, $reld));
-      }
     }
 
-    # Getting rid of directories
+    if (defined $copy_ext) {
+      # Find all paths with folders that end in copy extension and strip out
+      # all of the path levels after the copy extension:
+      #   /blah/blah.xcopy/blah -> /blah/blah.xcopy/
+      @files = _uniq map { my $file = $_;
+        $file =~ s/(?<=\.$copy_ext)\/.*/\//g; $file
+      } @files;
+
+      # Collect all the files that need copying
+      @copy_files = grep {
+        $_ =~ /\.$copy_ext/
+      } @files;
+
+      # And delete them from the overall file list
+      @files = grep {
+        !($_ =~ /\.$copy_ext/)
+      } @files;
+    }
+
+
+    # Separately copying the files or folders with the copy extension
+    foreach my $file (@copy_files) {
+      my $rel = substr $file, 1;
+      my $reld = $rel;
+
+      # Strip out the copy extension
+      $reld =~ s/\.$copy_ext\/.*/\//g;
+
+      # Addressing the peculiar way copying works:
+      # If the folder already exists the copy command will nest the new folder under
+      # it, if it is not postfixed with a '/'
+      my $source = _joinPath($src, $rel);
+      if (-d $source) {
+        $source = $source . '/';
+      }
+      _copyPath($source , _joinPath($dest, $reld));
+    }
+
+    # Separately symliking the folders with the symlink extension
+    foreach my $file (@symlink_files) {
+      my $rel = substr $file, 1;
+      my $reld = $rel;
+
+      # Strip out the link extension
+      $reld =~ s/\.$symlink_ext\/.*/\//g;
+      _linkPath(_joinPath($src, $rel), _joinPath($dest, $reld));
+    }
+
+    # Getting rid of directories, we are only interested in linking individual files
+    # at this point, since we are linking recursively
     @files = grep {
       !($_ =~ /\/$/)
     } @files;
