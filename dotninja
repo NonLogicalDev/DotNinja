@@ -67,6 +67,7 @@ my $defaultConf = {
   'default_symlink_ext' => 'xlink',
   'default_copy_ext'    => 'xcopy',
   'default_touch_ext'   => 'xtouch',
+  'default_name'        => '',
   'dirconf'             => {},
   'ignore'              => ['.DS_Store', '*.bak'],
 };
@@ -163,6 +164,7 @@ sub ProcessCategory{ my ($categoryPath) = @_; #{{{
     'dir_mode'    => $config{'default_dir_mode'},
     'symlink_ext' => $config{'default_symlink_ext'},
     'copy_ext'    => $config{'default_copy_ext'},
+    'name'        => $config{'default_name'},
     'ignore'      => $config{'ignore'}
   );
 
@@ -196,30 +198,35 @@ sub ProcessCategory{ my ($categoryPath) = @_; #{{{
 } #}}}
 sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
   debug " ";
-  my %options  = %{$options};
-  my $root     = $options{'root'};
-  my $dirMode  = $options{'dir_mode'};
-  my $dotMode  = $options{'dot_mode'};
-  my $copyMode = $options{'copy_mode'};
-  my @ignore   = @{$options{'ignore'}};
-  my $lext     = $options{'symlink_ext'};
-  my $cext     = $options{'copy_ext'};
+  my %options       = %{$options};
+  my $root          = $options{'root'};
+  my $dirMode       = $options{'dir_mode'};
+  my $dotMode       = $options{'dot_mode'};
+  my $overridenName = $options{'name'};
+  my $copyMode      = $options{'cmeopy_mode'};
+  my @ignore        = @{$options{'ignore'}};
+  my $lext          = $options{'symlink_ext'};
+  my $cext          = $options{'copy_ext'};
   my ($dest, $source);
 
   if ($g_flags{'root'}) {
     $root = $g_flags{'root'};
   }
 
+
   if ($dirMode eq 'id') {
     $source = _absPath($folderPath);
-    if ($dotMode eq 'no_dot') {
-      $dest   = $name;
+    if ($overridenName ne '') {
+      $dest = $overridenName;
     } else {
-      $dest   = '.' . $name;
+      $dest = $name;
+    }
+    if ($dotMode ne 'no_dot') {
+      $dest   = '.' . $dest;
     }
     $dest = _joinPath($root, $dest);
     DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
-  } elsif ($options{'dir_mode'} eq 'root') {
+  } elsif ($dirMode eq 'root') {
     foreach my $file (_listDir($folderPath)) {
       $source = _absPath(_joinPath($folderPath, $file));
       if ($dotMode eq 'no_dot') {
@@ -340,8 +347,8 @@ sub _globFilterMatch{ my ($globs, $el) = @_; #{{{
   return $good;
 } #}}}
 sub _extGlobMatch{ my ($glob, $el) = @_; #{{{
-  my $rStar  = '[^/]';
-  my $rDStar = '.*';
+  my $rStar  = '[^/]*?';
+  my $rDStar = '.*?';
   my $regex  = '';
 
   if ($glob =~ /\*/) {
