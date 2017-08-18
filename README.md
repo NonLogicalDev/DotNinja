@@ -11,10 +11,30 @@ like to have utmost control over organisation of their dotfiles, for those that
 do not accept the flat structure and want to group their files by topics. For those
 who need to bootstrap more than just one machine and perhaps more than just one user.
 
-Enter The DOTNinja, a highly configurable dotfile organizer.
+Enter The DOTNinja, a highly configurable dotfile organizer:
+
+```
+Help:
+# Commands:
+  link -- links the directories from dotfiles folder
+  help -- prints this message
+# Options
+>  --root	-- Specifies alternative root location (for testing configuration)
+>  -b	-- Backup files and place new ones in place, appends '.backup'
+>  -c	-- Specifies category for dotfiles (defaults to common)
+>  -d	-- Dry run current set up
+>  -f	-- Forces execution (overwrites existing links, and resyncs folders)
+>  -r	-- When working with folders overwrite them (prompts user)
+>  -t	-- Specifies a specific topic to sync
+>  -tl	-- Lists the available topics
+>  -v	-- Be more verbose (prints debug stuff)
+>  -yy	-- Answer all prompts with yes
 
 All you need to get started is a dir with the following structure:
- 
+```
+
+Now with teaser out of the way here is what you need to get started. You will need a directory structure like this:
+
 ```
 (dir)/
  |>(category)/
