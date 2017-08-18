@@ -59,7 +59,7 @@ And you do that using a configuration `dot.conf` on per category basis:
 
 Here is an example:
 
-```
+```perl
 package Dot::Conf;
 
 our $config = {
