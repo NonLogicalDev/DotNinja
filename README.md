@@ -1,7 +1,10 @@
 # DotNinja
 
-This my answer to the age old question, "How do I manage my dotfiles if I am
-anal about not having a git repo in my home directory?".
+This my answer to the age old question
+
+> "How do I manage my dotfiles if I am anal about not having a git repo in my home directory?"
+>
+> — Mr. Someone (Perhaps Me)
 
 Ladies and gents, I belive I have an answer. This tool is for the types that
 like to have utmost control over organisation of their dotfiles, for those that 
