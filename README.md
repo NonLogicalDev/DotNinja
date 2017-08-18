@@ -30,7 +30,6 @@ Help:
 >  -v	-- Be more verbose (prints debug stuff)
 >  -yy	-- Answer all prompts with yes
 
-All you need to get started is a dir with the following structure:
 ```
 
 Now with teaser out of the way here is what you need to get started. You will need a directory structure like this:
