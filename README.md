@@ -112,6 +112,4 @@ our $config = {
   #   This works roughly like .gitignore
   'ignore' => ['.DS_Store', '*.bak'],
 };
-
-# vim: ft=perl
 ```
