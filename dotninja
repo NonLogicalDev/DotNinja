@@ -396,43 +396,57 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
     # Some files/folders might be overriden we shall collect them here
     my @copy_files;
     my @symlink_files;
+    my $link_dir_directly = 0;
 
     if (defined $symlink_ext) {
-      # Find all paths with folders that end in link extension and strip out
-      # all of the path levels after the link extension:
-      #   /blah/blah.xlink/blah -> /blah/blah.xlink/
-      @files = _uniq map { my $file = $_;
-        $file =~ s/(?<=\.$symlink_ext)\/.*/\//g; $file
-      } @files;
+      if ($src =~ /\.$symlink_ext/) {
+        debug("MATCHING");
+        @symlink_files = ( $src );
+        @files = ();
+        $link_dir_directly = 1;
+      } else {
+        # Find all paths with folders that end in link extension and strip out
+        # all of the path levels after the link extension:
+        #   /blah/blah.xlink/blah -> /blah/blah.xlink/
+        @files = _uniq map { my $file = $_;
+          $file =~ s/(?<=\.$symlink_ext)\/.*/\//g; $file
+        } @files;
 
-      # Collect all the folders that need linking
-      @symlink_files = grep {
-        $_ =~ /\.$symlink_ext/
-      } @files;
+        # Collect all the folders that need linking
+        @symlink_files = grep {
+          $_ =~ /\.$symlink_ext/
+        } @files;
 
-      # And delete them from the all of the overall file list
-      @files = grep {
-        !($_ =~ /\.$symlink_ext/)
-      } @files;
+        # And delete them from the all of the overall file list
+        @files = grep {
+          !($_ =~ /\.$symlink_ext/)
+        } @files;
+      }
     }
 
     if (defined $copy_ext) {
-      # Find all paths with folders that end in copy extension and strip out
-      # all of the path levels after the copy extension:
-      #   /blah/blah.xcopy/blah -> /blah/blah.xcopy/
-      @files = _uniq map { my $file = $_;
-        $file =~ s/(?<=\.$copy_ext)\/.*/\//g; $file
-      } @files;
+      if ($src =~ /\.$copy_ext/) {
+        @copy_files = ( $src );
+        @files = ();
+        $link_dir_directly = 1;
+      } else {
+        # Find all paths with folders that end in copy extension and strip out
+        # all of the path levels after the copy extension:
+        #   /blah/blah.xcopy/blah -> /blah/blah.xcopy/
+        @files = _uniq map { my $file = $_;
+          $file =~ s/(?<=\.$copy_ext)\/.*/\//g; $file
+        } @files;
 
-      # Collect all the files that need copying
-      @copy_files = grep {
-        $_ =~ /\.$copy_ext/
-      } @files;
+        # Collect all the files that need copying
+        @copy_files = grep {
+          $_ =~ /\.$copy_ext/
+        } @files;
 
-      # And delete them from the overall file list
-      @files = grep {
-        !($_ =~ /\.$copy_ext/)
-      } @files;
+        # And delete them from the overall file list
+        @files = grep {
+          !($_ =~ /\.$copy_ext/)
+        } @files;
+      }
     }
 
 
@@ -447,11 +461,17 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
       # Addressing the peculiar way copying works:
       # If the folder already exists the copy command will nest the new folder under
       # it, if it is not postfixed with a '/'
-      my $source = _joinPath($src, $rel);
+      my $source = _joinPath($src, $reld);
+      my $destination = _joinPath($dest, $reld);
+      if ($link_dir_directly) {
+        $source = $src;
+        $destination = $dest;
+        $destination =~ s/\.$copy_ext//g;
+      }
       if (-d $source) {
         $source = $source . '/';
       }
-      _copyPath($source , _joinPath($dest, $reld));
+      _copyPath($source, $destination);
     }
 
     # Separately symliking the folders with the symlink extension
@@ -461,7 +481,15 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
 
       # Strip out the link extension
       $reld =~ s/\.$symlink_ext\/.*/\//g;
-      _linkPath(_joinPath($src, $rel), _joinPath($dest, $reld));
+
+      my $source = _joinPath($src, $rel);
+      my $destination = _joinPath($dest, $reld);
+      if ($link_dir_directly) {
+        $source = $src;
+        $destination = $dest;
+        $destination =~ s/\.$symlink_ext//g;
+      }
+      _linkPath($source, $destination);
     }
 
     # Getting rid of directories, we are only interested in linking individual files
