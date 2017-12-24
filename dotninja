@@ -624,6 +624,7 @@ sub _linkIO { my ($src, $dest) = @_; #{{{
   ## IO Operation is Shielded by Dry Run
   unless ($g_flags{'dry_run'}) {
     _ensureParentFolderExists($dest);
+    _systemRemove($dest);
     _systemLink($src, $dest);
   }
 } #}}}
