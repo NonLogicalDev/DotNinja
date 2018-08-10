@@ -164,6 +164,7 @@ sub ProcessCategory{ my ($categoryPath) = @_; #{{{
     'dir_mode'    => $config{'default_dir_mode'},
     'symlink_ext' => $config{'default_symlink_ext'},
     'copy_ext'    => $config{'default_copy_ext'},
+    'touch_ext'   => $config{'default_touch_ext'},
     'name'        => $config{'default_name'},
     'ignore'      => $config{'ignore'}
   );
@@ -207,6 +208,7 @@ sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
   my @ignore        = @{$options{'ignore'}};
   my $lext          = $options{'symlink_ext'};
   my $cext          = $options{'copy_ext'};
+  my $text          = $options{'touch_ext'};
   my ($dest, $source);
 
   if ($g_flags{'root'}) {
@@ -225,7 +227,7 @@ sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
       $dest   = '.' . $dest;
     }
     $dest = _joinPath($root, $dest);
-    DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
+    DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext, $text);
   } elsif ($dirMode eq 'root') {
     foreach my $file (_listDir($folderPath)) {
       $source = _absPath(_joinPath($folderPath, $file));
@@ -235,11 +237,11 @@ sub ProcessFolder{ my ($folderPath, $name, $options) = @_; #{{{
         $dest   = '.' . $file;
       }
       $dest = _joinPath($root, $dest);
-      DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext);
+      DispatchItem($copyMode, $source, $dest, \@ignore, $lext, $cext, $text);
     }
   }
 } #}}}
-sub DispatchItem{ my ($copyMode, $source, $dest, $ignore, $lext, $cext) = @_; #{{{
+sub DispatchItem{ my ($copyMode, $source, $dest, $ignore, $lext, $cext, $text) = @_; #{{{
   if($copyMode eq 'copy') {
     if (-d $source) { $source = $source . '/'; }
     _copyPath($source, $dest);
@@ -247,7 +249,7 @@ sub DispatchItem{ my ($copyMode, $source, $dest, $ignore, $lext, $cext) = @_; #{
     _linkPath($source, $dest);
   } elsif($copyMode eq 'symlink_rec') {
     debug "Recursively Linking Location [$source]";
-    _linkPathRec($source, $dest, $ignore, $lext, $cext);
+    _linkPathRec($source, $dest, $ignore, $lext, $cext, $text);
   }
 } #}}}
 
@@ -388,7 +390,7 @@ sub _prefixFilterContains{ my ($prefix, $arr) = @_; #{{{
   my @arr = @{$arr};
   return grep { index($_, $prefix) == 0 } @arr;
 } #}}}
-sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
+sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext, $touch_ext) = @_; #{{{
   if (-d $src) {
     my @files = _listDirRec($src);
     @files = _globFilterExclude($ignore, \@files);
@@ -396,11 +398,13 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
     # Some files/folders might be overriden we shall collect them here
     my @copy_files;
     my @symlink_files;
+    my @touch_files;
     my $link_dir_directly = 0;
+
+    
 
     if (defined $symlink_ext) {
       if ($src =~ /\.$symlink_ext/) {
-        debug("MATCHING");
         @symlink_files = ( $src );
         @files = ();
         $link_dir_directly = 1;
@@ -449,6 +453,58 @@ sub _linkPathRec{ my ($src, $dest, $ignore, $symlink_ext, $copy_ext) = @_; #{{{
       }
     }
 
+    if (defined $touch_ext) {
+      if ($src =~ /\.$touch_ext/) {
+        @touch_files = ( $src );
+        @files = ();
+        $link_dir_directly = 1;
+        
+      } else {
+        # Find all paths with folders that end in copy extension and strip out
+        # all of the path levels after the copy extension:
+        #   /blah/blah.xtouch/blah -> /blah/blah.xtouch/
+        @files = _uniq map { my $file = $_;
+          $file =~ s/(?<=\.$touch_ext)\/.*/\//g; $file
+        } @files;
+
+        # Collect all the files that need copying
+        @touch_files = grep {
+          $_ =~ /\.$touch_ext/
+        } @files;
+
+        # And delete them from the overall file list
+        @files = grep {
+          !($_ =~ /\.$touch_ext/)
+        } @files;
+      }
+
+      info("MATCHING: @files");
+    }
+
+
+    # Separately copying the files or folders with the touch extension
+    foreach my $file (@touch_files) {
+      my $rel = substr $file, 1;
+      my $reld = $rel;
+
+      # Strip out the copy extension
+      $reld =~ s/\.$touch_ext\/.*/\//g;
+
+      # Addressing the peculiar way copying works:
+      # If the folder already exists the copy command will nest the new folder under
+      # it, if it is not postfixed with a '/'
+      my $source = _joinPath($src, $reld);
+      my $destination = _joinPath($dest, $reld);
+      if ($link_dir_directly) {
+        $source = $src;
+        $destination = $dest;
+        $destination =~ s/\.$copy_ext//g;
+      }
+      if (-d $source) {
+        $source = $source . '/';
+      }
+      _touchPath($source, $destination);
+    }
 
     # Separately copying the files or folders with the copy extension
     foreach my $file (@copy_files) {
@@ -540,6 +596,15 @@ sub _copyPath{ my ($src, $dest) = @_; #{{{
     }
   } else {
     info "COPYING:    [$dest] <= [$src]";
+    $dest = _absPath($dest);
+    _syncIO($src, $dest);
+  }
+} #}}}
+sub _touchPath{ my ($src, $dest) = @_; #{{{
+  if (-e _absPath($dest)) {
+    info "EXISTSs:     [$dest] <= [$src]";
+  } else {
+    info "TOUCHING:   [$dest] <= [$src]";
     $dest = _absPath($dest);
     _syncIO($src, $dest);
   }
